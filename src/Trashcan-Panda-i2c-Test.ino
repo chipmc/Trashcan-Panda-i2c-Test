@@ -44,6 +44,8 @@ unsigned long lastSampleTimestamp;
 unsigned long sampleRateMillis = 2000;
 const int FRAMversionNumber = 42;                    // Note, this will reset the FRAM from what is in the visitation counters
 bool powerCycleOnce = true;                        // One time, we need to test the ability to power down the board, ensure the i2c bus is working and then power back up
+volatile bool positionInterrupt = false;
+uint8_t lastPos = 0;
 
 namespace FRAM {                                    // Moved to namespace instead of #define to limit scope
   enum Addresses {
@@ -62,9 +64,7 @@ void setup() {
   pinMode(disableModule,OUTPUT);
   digitalWrite(disableModule,LOW);
 
-
   delay(1000);
-
 
   i2cScan();
 
@@ -130,7 +130,6 @@ void setup() {
 
 }
 
-// loop() runs over and over again, as quickly as it can execute.
 void loop() {
 
 if (millis() - lastSampleTimestamp > sampleRateMillis) {
@@ -190,14 +189,55 @@ if (powerCycleOnce) {
     sensorOnlineTOF = true;
   }
   else Log.info("TOF Sensor failed initialization");
+
   if (sensorOnlineLIS3DH && sensorOnlineTOF) {
     Log.info("Power on test complete - measuring resumed");
+
+    Log.info("Turning on position interrupt");
+
+    attachInterrupt(intPin, positionInterruptHandler, RISING);
+
+	  // Initialize sensors
+	  LIS3DHConfig config;
+	  config.setPositionInterrupt(16);
+
+	  bool setupSuccess = accel.setup(config);
+    if (setupSuccess) Log.info("Position Interrupt Activated Successfully");
+
   }
   else {
     Log.info("Power on test failed - stopping");
     while(1);
   }
 
+}
+
+if (positionInterrupt) {
+  char positionMessage[32] = "Other orientation";
+  positionInterrupt = false;
+  // Test the position interrupt support. Normal result is 5.
+  // 5: normal position, with the accerometer facing up
+  // 4: upside down
+  // 1 - 3: other orientations
+  uint8_t pos = accel.readPositionInterrupt();
+  if (pos != 0 && pos != lastPos) {
+    switch (pos) {
+      case 6: 
+        snprintf(positionMessage,sizeof(positionMessage),"Upside Down - Position = %d", pos);
+        break;
+      case 5: 
+        snprintf(positionMessage,sizeof(positionMessage),"Rightside Up - Position = %d", pos);
+        break;
+      case 1 ... 4:
+        snprintf(positionMessage,sizeof(positionMessage),"On Side - Position = %d", pos);
+        break;
+      default:
+        snprintf(positionMessage,sizeof(positionMessage),"Not Defined - Position = %d", pos);
+        break;
+    }
+    Log.info(positionMessage);
+    lastPos = pos;
+  }
 }
 
 }
@@ -240,4 +280,8 @@ bool i2cScan() {                                            // Scan the i2c bus 
 
   Log.info(resultStr);
   return 1;
+}
+
+void positionInterruptHandler() {
+	positionInterrupt = true;
 }
